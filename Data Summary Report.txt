@@ -1,0 +1,23 @@
+Data Summary Report — v0.1
+
+Dataset 1: Capacidade de geração por UF's \ 2006-2026
+- Fonte: ANEEL Dados Abertos
+- Arquivo: capacidade-instalada-geracao-uf.csv
+- Tipo: CSV estruturado, separador ponto e vírgula, encoding=latin1  
+- Período: 2006 a 2026
+- Colunas relevantes: SigUF, MdaPotencialInstaladakW
+- Objetivo de uso: Vou medir a quantidade de energia que é usada nos estados 
+e separa-los por regiões intercalando com o outro dataset a quantidade e o tipo
+ de energia que é utilizada.
+- Limitações identificadas: Não diz o tipo de energia que é consumida nos 
+estados.
+
+Dataset 2: Empreendimento Geração Diário \ 2026
+- Fonte: ANEEL Dadaos Abertos
+- Arquivo: siga-empreendimentos-geracao-diario.csv
+- Tipo: CSV Estruturado, separador ponte e virgula, encoding=utf-8
+- Colunas Relevantes: SigUFPrincipal, DscOrigemCombustivel, DscFonteCombustivel, NomFonteCombustivel, MdaPotenciaOutorgadaKw, MdaPotenciaFiscalizadaKw e MdaGarantiaFisicaKw
+- Objetivo de uso: Correlacionar usinas de energia renovável por UF's no Brasil
+e consumo por Kw.
+- Limitações identificadas: O dado representa a capacidade de geração instalada 
+e não o consumo efetivo.
