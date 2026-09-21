@@ -21,8 +21,11 @@ Promover o uso consciente e sustentável de energia em residências, usando dado
 2. **Entendimento dos Dados:** Coleta via [ANEEL Dados Abertos](https://dadosabertos.aneel.gov.br) e Web Scraping (portal acadêmico/UFPR).
 3. **Preparação dos Dados:** Limpeza, filtros por UF e Ano, estruturação na pasta `data/`.
 4. **Modelagem e Visualização:** Dashboard interativo em Streamlit com suporte a Cache, Session State, Upload/Download e Nuvem de Palavras.
+5. **Artigos:** [Revistas UFPR](https://revistas.ufpr.br/rber/article/view/65759)
 
 ## 📦 Entregáveis Esperados
 Relatório e dashboard interativo com análise de dados, filtros por estado/ano, indicadores de sustentabilidade energética e recomendações voltadas ao consumo residencial consciente.
 
+## Iniciativa de Inspiração
+[ipea.gov.br](https://www.ipea.gov.br/ods/ods7.html)
 
