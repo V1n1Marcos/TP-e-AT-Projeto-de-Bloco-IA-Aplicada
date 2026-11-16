@@ -169,47 +169,58 @@ def pagina_nuvem_palavras():
         st.error("Arquivo 'data/textos_web.txt' não encontrado. Execute `python scrapping.py`.")
 
 def pagina_llm_api():
-    st.title("🤖 Integração FastAPI & Preparação para LLMs")
+    st.title("🤖 Integração FastAPI & Modelo HuggingFace Local")
 
-    st.markdown("""
-    ### Casos de Uso Planejados para LLMs (Próxima Fase)
-    1. **Sumarização Automática de Literatura Técnica:** Uso de LLMs para condensar artigos científicos raspados (como o corpus da UFPR) em recomendações práticas para consumidores residenciais.
-    2. **Sistema de Perguntas e Respostas (RAG / Q&A):** Indexação dos dados tabulares da ANEEL e textos técnicos para responder dúvidas em linguagem natural (ex: *"Qual o crescimento da energia solar na Bahia nos últimos 5 anos?"*).
-    3. **Geração Automatizada de Relatórios Executivos:** Criação dinâmica de diagnósticos estaduais cruzando os endpoints da `FastAPI` com prompts estruturados.
-    4. **Análise de Sentimento e Percepção Pública:** Classificação de notícias e feedbacks enviados via rota `POST` sobre tarifas e incentivos à microgeração.
-    """)
+    st.subheader("🧠 Testar Inferência Local (POST /processar_texto)")
+    st.write("Envie um texto sobre energia renovável ou carregue o trecho extraído da UFPR para classificação de sentimento via modelo HuggingFace rodando 100% offline.")
 
-    st.divider()
-    st.subheader("🔌 Consumo da API Backend (FastAPI)")
+    texto_padrao = "A instalação de painéis solares residenciais reduziu drasticamente o valor da conta de luz e trouxe excelente retorno sustentável."
+    
+    if st.button("Carregar amostra do texto raspado da UFPR"):
+        if os.path.exists("data/textos_web.txt"):
+            with open("data/textos_web.txt", "r", encoding="utf-8") as f:
+                texto_padrao = f.read()[:450]
+        else:
+            st.warning("Arquivo 'data/textos_web.txt' não encontrado localmente.")
 
-    col_api1, col_api2 = st.columns(2)
+    texto_usuario = st.text_area("Texto para análise do modelo local:", value=texto_padrao, height=130)
 
-    with col_api1:
-        st.markdown("**Teste 1: Consulta de Corpus Textual (`GET /dados/resumo-texto`)**")
-        if st.button("Buscar Texto na API"):
+    if st.button("Analisar Texto via FastAPI Local", type="primary"):
+        with st.spinner("Processando texto no modelo local..."):
             try:
-                res = requests.get("http://127.0.0.1:8000/dados/resumo-texto", timeout=5)
-                if res.status_code == 200:
-                    st.json(res.json())
+                resposta = requests.post(
+                    "http://127.0.0.1:8000/processar_texto",
+                    json={"texto": texto_usuario},
+                    timeout=20
+                )
+                
+                if resposta.status_code == 200:
+                    dados = resposta.json()
+                    resultado = dados["resultado"]
+                    
+                    st.caption(f"**Tipo de Análise:** {dados['tipo_analise']} | **Modelo:** `{dados['modelo_utilizado']}`")
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Classificação", resultado["classificacao"].upper())
+                    col2.metric("Confiança", resultado["confianca_percentual"])
+                    col3.metric("Caracteres Analisados", dados["caracteres_analisados"])
+                    
+                    with st.expander("Ver Response Model JSON completo validado"):
+                        st.json(dados)
                 else:
-                    st.error(f"Erro {res.status_code} na API.")
-            except Exception:
-                st.warning("API offline. Rode `uvicorn api:app --reload` no terminal.")
-
-    with col_api2:
-        st.markdown("**Teste 2: Consulta por Estado (`GET /dados/capacidade`)**")
-        uf_input = st.text_input("Digite a sigla da UF (ex: BA, SP, MG):", value="BA", max_chars=2)
-        if st.button("Consultar Capacidade via API"):
-            try:
-                res = requests.get(f"http://127.0.0.1:8000/dados/capacidade?uf={uf_input}", timeout=5)
-                if res.status_code == 200:
-                    dados = res.json()
-                    st.success(f"Total de registros encontrados para {uf_input.upper()}: {dados['total_registros']}")
-                    st.json(dados["dados"][:3]) # Mostra os 3 primeiros
-                else:
-                    st.error(f"Erro {res.status_code} na API.")
-            except Exception:
-                st.warning("API offline. Rode `uvicorn api:app --reload` no terminal.")
+                    # Exibe o ErroDetalhadoResponse estruturado da API
+                    erro_json = resposta.json()
+                    st.error(f"**{erro_json.get('tipo_erro', 'Erro')} (HTTP {resposta.status_code}):** {erro_json.get('mensagem', 'Falha desconhecida.')}")
+                    if "sugestao_resolucao" in erro_json:
+                        st.info(f"💡 **Como resolver:** {erro_json['sugestao_resolucao']}")
+                        
+            except requests.exceptions.ConnectionError:
+                st.error("🔌 **Falha de Conexão:** Não foi possível alcançar o servidor FastAPI em `http://127.0.0.1:8000`.")
+                st.info("💡 **Como resolver:** Abra um terminal na pasta do projeto e execute `uvicorn api:app --reload`.")
+            except requests.exceptions.Timeout:
+                st.error("⏱️ **Timeout na Requisição:** O servidor demorou mais de 20 segundos para responder.")
+                st.info("💡 **Como resolver:** Tente enviar um texto mais curto ou verifique o consumo de CPU da sua máquina.")
+            except Exception as e:
+                st.error(f"⚠️ **Erro Inesperado no Cliente:** {str(e)}")
 
 # ==============================================================================
 # ROTEAMENTO E MENU DE NAVEGAÇÃO (st.navigation)
