@@ -1,10 +1,4 @@
-# Ambiente Virtual
 .venv/
-env/
-venv/
-modelo_local
-
-# Arquivos do Python/Streamlit
 __pycache__/
-*.pyc
-.streamlit/
+modelo_local/
+modelo_sumarizacao/

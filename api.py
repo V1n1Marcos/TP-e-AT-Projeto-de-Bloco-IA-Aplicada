@@ -1,46 +1,86 @@
-from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-import pandas as pd
+from functools import lru_cache
+from typing import Any, Dict, List, Optional
 import logging
 import os
 
-# Configuração de Logs para diagnóstico técnico no servidor
+import pandas as pd
+import torch
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from transformers import (
+    AutoModelForSeq2SeqLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    pipeline,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("API_Energia_Renovavel")
 
+# ==============================================================================
+# ESTADO GLOBAL GERENCIADO & POOL DE THREADS REUTILIZÁVEL
+# ==============================================================================
+PASTA_SENTIMENTO = "./modelo_local"
+PASTA_SUMARIZACAO = "./modelo_sumarizacao"
+CAMINHO_CSV_CAPACIDADE = "data/capacidade-instalada-geracao-uf.csv"
+CAMINHO_TXT_SCRAPING = "data/textos_web.txt"
+
+executor_ia = ThreadPoolExecutor(max_workers=2)
+modelos_estado: Dict[str, Any] = {
+    "sentimento": None,
+    "erro_sentimento": None,
+    "sumarizacao": None,
+    "erro_sumarizacao": None,
+}
+
+def _carregar_pipeline(pasta: str, tarefa: str, classe_modelo: Any) -> tuple[Any, Optional[str]]:
+    if not os.path.exists(pasta):
+        return None, f"Diretório '{pasta}' não encontrado."
+    try:
+        tok = AutoTokenizer.from_pretrained(pasta, local_files_only=True)
+        mod = classe_modelo.from_pretrained(pasta, local_files_only=True)
+        return pipeline(tarefa, model=mod, tokenizer=tok), None
+    except Exception as exc:
+        return None, f"Falha ao inicializar modelo em '{pasta}': {exc}"
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    modelos_estado["sentimento"], modelos_estado["erro_sentimento"] = _carregar_pipeline(
+        PASTA_SENTIMENTO, "sentiment-analysis", AutoModelForSequenceClassification
+    )
+    modelos_estado["sumarizacao"], modelos_estado["erro_sumarizacao"] = _carregar_pipeline(
+        PASTA_SUMARIZACAO, "summarization", AutoModelForSeq2SeqLM
+    )
+    logger.info(
+        "Inicialização concluída | Sentimento: %s | Sumarização: %s",
+        bool(modelos_estado["sentimento"]),
+        bool(modelos_estado["sumarizacao"]),
+    )
+    yield
+    executor_ia.shutdown(wait=False)
+    modelos_estado.clear()
+
 app = FastAPI(
-    title="API de Energia Renovável + LLM Local",
-    description="API RESTful com tratamento robusto de exceções HTTP, validação Pydantic e inferência HuggingFace offline.",
-    version="4.0.0"
+    title="API de Energia Renovável + NLP & Sumarização Local",
+    description="API RESTful otimizada com cache em memória, lifespan gerenciado e inferência HuggingFace offline.",
+    version="5.1.0",
+    lifespan=lifespan,
 )
 
 # ==============================================================================
-# CARREGAMENTO DO MODELO HUGGINGFACE LOCAL (COM DIAGNÓSTICO DE FALHA)
+# CACHE DE DADOS EM MEMÓRIA
 # ==============================================================================
-PASTA_MODELO = "./modelo_local"
-nlp_pipeline = None
-erro_carregamento_modelo: Optional[str] = None
-
-if os.path.exists(PASTA_MODELO):
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(PASTA_MODELO, local_files_only=True)
-        model = AutoModelForSequenceClassification.from_pretrained(PASTA_MODELO, local_files_only=True)
-        nlp_pipeline = pipeline("sentiment-analysis", model=model, tokenizer=tokenizer)
-        logger.info("Modelo HuggingFace local carregado com sucesso.")
-    except Exception as e:
-        erro_carregamento_modelo = f"Falha ao inicializar os pesos do modelo local: {str(e)}"
-        logger.error(erro_carregamento_modelo)
-else:
-    erro_carregamento_modelo = f"Diretório '{PASTA_MODELO}' não encontrado no servidor."
-    logger.warning(erro_carregamento_modelo)
+@lru_cache(maxsize=1)
+def _ler_csv_capacidade_cached(mtime: float) -> pd.DataFrame:
+    df = pd.read_csv(CAMINHO_CSV_CAPACIDADE, encoding="latin1", sep=";")
+    return df.where(pd.notnull(df), None)
 
 # ==============================================================================
-# SCHEMAS DE ENTRADA, SAÍDA E ERRO PADRONIZADO
+# SCHEMAS DE ENTRADA, SAÍDA E ERRO PADRONIZADO (PYDANTIC)
 # ==============================================================================
 class ErroDetalhadoResponse(BaseModel):
     status: str = "Erro"
@@ -52,16 +92,22 @@ class ErroDetalhadoResponse(BaseModel):
 class NovoRegistroRequest(BaseModel):
     uf: str = Field(..., min_length=2, max_length=2, description="Sigla do estado (ex: BA, SP)")
     fonte: str = Field(..., min_length=3, description="Tipo de fonte energética (ex: Solar, Eólica)")
-    capacidade_mw: float = Field(..., gt=0, description="Capacidade instalada em Megawatts (deve ser maior que 0)")
+    capacidade_mw: float = Field(..., gt=0, description="Capacidade instalada em Megawatts")
     ano: int = Field(..., ge=2000, le=2030, description="Ano de referência entre 2000 e 2030")
 
 class TextoEntradaRequest(BaseModel):
-    texto: str = Field(..., min_length=3, description="Texto em português para análise pelo modelo local")
+    texto: str = Field(..., min_length=3, description="Texto em português para classificação de sentimento")
+
+class SumarizacaoRequest(BaseModel):
+    texto: str = Field(..., min_length=50, description="Artigo ou relatório técnico com no mínimo 50 caracteres")
+    tamanho_maximo: int = Field(default=130, ge=30, le=300, description="Limite máximo de tokens do resumo")
+    tamanho_minimo: int = Field(default=30, ge=10, le=150, description="Limite mínimo de tokens do resumo")
 
 class StatusResponse(BaseModel):
     status: str
-    modelo_local_carregado: bool
-    detalhe_modelo: str
+    modelo_sentimento_carregado: bool
+    modelo_sumarizacao_carregado: bool
+    detalhe_modelos: str
     versao_api: str
     endpoints_disponiveis: List[str]
 
@@ -96,228 +142,181 @@ class ProcessamentoTextoResponse(BaseModel):
     texto_processado: str
     resultado: ResultadoAnalise
 
+class SumarizacaoResponse(BaseModel):
+    status: str
+    tipo_analise: str
+    modelo_utilizado: str
+    caracteres_originais: int
+    caracteres_resumo: int
+    taxa_compressao_percentual: str
+    resumo_gerado: str
+
 # ==============================================================================
-# EXCEPTION HANDLERS GLOBAIS (PADRONIZAÇÃO PARA O CLIENTE)
+# EXCEPTION HANDLERS GLOBAIS
 # ==============================================================================
+SUGESTOES_ERRO = {
+    400: "Corrija o conteúdo da requisição e tente novamente.",
+    404: "Verifique se o parâmetro existe ou se 'python scrapping.py' foi executado.",
+    500: "Erro interno no processamento. Verifique a integridade dos arquivos em 'data/'.",
+    503: "Execute 'python baixar_modelo.py' na raiz do projeto e reinicie o servidor FastAPI.",
+    504: "O modelo excedeu o tempo limite em CPU. Envie um texto menor.",
+}
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Intercepta erros de validação (422) e devolve instruções claras ao usuário."""
-    erros_formatados = []
-    for err in exc.errors():
-        campo = " -> ".join(str(loc) for loc in err["loc"] if loc != "body")
-        erros_formatados.append(f"Campo '{campo}': {err['msg']}")
-    
-    detalhe_texto = "; ".join(erros_formatados)
-    logger.warning(f"Erro de validação na rota {request.url.path}: {detalhe_texto}")
-    
+    detalhes = "; ".join(
+        f"Campo '{' -> '.join(str(loc) for loc in err['loc'] if loc != 'body')}': {err['msg']}"
+        for err in exc.errors()
+    )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=ErroDetalhadoResponse(
             codigo_http=422,
             tipo_erro="Dados de Entrada Inválidos",
-            mensagem=f"Os dados enviados não atendem ao formato esperado: {detalhe_texto}",
-            sugestao_resolucao="Verifique os tipos, tamanhos mínimos/máximos e campos obrigatórios no esquema da rota (/docs)."
-        ).model_dump()
+            mensagem=f"Os dados enviados não atendem ao formato esperado: {detalhes}",
+            sugestao_resolucao="Verifique os tipos e tamanhos mínimos/máximos na documentação (/docs).",
+        ).model_dump(),
     )
 
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
-    """Padroniza todas as HTTPExceptions lançadas intencionalmente nas rotas."""
-    sugestoes = {
-        400: "Corrija o conteúdo da requisição e tente novamente.",
-        404: "Verifique se o parâmetro informado existe ou se os scripts de coleta (scrapping.py) foram executados.",
-        500: "Erro interno no processamento de arquivos. Verifique a integridade dos dados em 'data/'.",
-        503: "Execute 'python baixar_modelo.py' na raiz do projeto e reinicie o servidor FastAPI.",
-        504: "O modelo demorou além do limite esperado. Tente enviar um texto menor."
-    }
     return JSONResponse(
         status_code=exc.status_code,
         content=ErroDetalhadoResponse(
             codigo_http=exc.status_code,
             tipo_erro=f"Erro HTTP {exc.status_code}",
             mensagem=str(exc.detail),
-            sugestao_resolucao=sugestoes.get(exc.status_code, "Consulte a documentação da API em /docs.")
-        ).model_dump()
+            sugestao_resolucao=SUGESTOES_ERRO.get(exc.status_code, "Consulte /docs."),
+        ).model_dump(),
     )
 
 @app.exception_handler(Exception)
 async def global_unexpected_exception_handler(request: Request, exc: Exception):
-    """Captura falhas imprevistas (500) evitando exposição de stack trace bruto ao cliente."""
-    logger.error(f"Erro inesperado em {request.url.path}: {str(exc)}", exc_info=True)
+    logger.error("Erro inesperado em %s: %s", request.url.path, exc, exc_info=True)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=ErroDetalhadoResponse(
             codigo_http=500,
             tipo_erro="Erro Interno do Servidor",
             mensagem="Ocorreu uma falha inesperada durante o processamento da requisição.",
-            sugestao_resolucao="Verifique os logs do terminal onde o Uvicorn está rodando para detalhes técnicos."
-        ).model_dump()
+            sugestao_resolucao="Verifique os logs do terminal onde o Uvicorn está rodando.",
+        ).model_dump(),
     )
+
+# ==============================================================================
+# UTILITÁRIO DE INFERÊNCIA COM TIMEOUT E INFERENCE_MODE
+# ==============================================================================
+def _executar_inferencia(pipe: Any, entrada: str, timeout_seg: float, **kwargs) -> Any:
+    def _rodar():
+        with torch.inference_mode():
+            return pipe(entrada, **kwargs)[0]
+
+    try:
+        return executor_ia.submit(_rodar).result(timeout=timeout_seg)
+    except FuturesTimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"O modelo excedeu o tempo limite de {int(timeout_seg)} segundos em CPU.",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Falha interna durante a inferência local: {exc}",
+        )
 
 # ==============================================================================
 # ROTAS DA API
 # ==============================================================================
-
-@app.get("/", response_model=StatusResponse, summary="Status da API e diagnóstico do modelo local")
+@app.get("/", response_model=StatusResponse, summary="Status da API e dos modelos locais")
 def home():
-    detalhe = "Modelo carregado e pronto para inferência offline." if nlp_pipeline else f"Indisponível ({erro_carregamento_modelo})"
+    sent_ok = modelos_estado["sentimento"] is not None
+    sum_ok = modelos_estado["sumarizacao"] is not None
+    
+    txt_sent = "Sentimento: OK" if sent_ok else f"Sentimento: Indisponível ({modelos_estado['erro_sentimento']})"
+    txt_sum = "Sumarização: OK" if sum_ok else f"Sumarização: Indisponível ({modelos_estado['erro_sumarizacao']})"
+    
     return StatusResponse(
         status="API Online",
-        modelo_local_carregado=nlp_pipeline is not None,
-        detalhe_modelo=detalhe,
-        versao_api="4.0.0",
-        endpoints_disponiveis=["/docs", "/dados/capacidade", "/dados/resumo-texto", "/dados/registrar", "/processar_texto"]
+        modelo_sentimento_carregado=sent_ok,
+        modelo_sumarizacao_carregado=sum_ok,
+        detalhe_modelos=f"{txt_sent} | {txt_sum}",
+        versao_api="5.1.0",
+        endpoints_disponiveis=[
+            "/docs",
+            "/dados/capacidade",
+            "/dados/resumo-texto",
+            "/dados/registrar",
+            "/processar_texto",
+            "/sumarizar_texto",
+        ],
     )
 
-@app.get(
-    "/dados/capacidade",
-    response_model=CapacidadeResponse,
-    responses={400: {"model": ErroDetalhadoResponse}, 404: {"model": ErroDetalhadoResponse}, 500: {"model": ErroDetalhadoResponse}},
-    summary="Consulta capacidade instalada da ANEEL por UF"
-)
+@app.get("/dados/capacidade", response_model=CapacidadeResponse, summary="Consulta capacidade instalada da ANEEL por UF")
 def obter_capacidade(uf: Optional[str] = None):
-    caminho_csv = "data/capacidade-instalada-geracao-uf.csv"
-    if not os.path.exists(caminho_csv):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Base de dados 'capacidade-instalada-geracao-uf.csv' não encontrada na pasta 'data/'."
-        )
-    
-    if uf and (len(uf.strip()) != 2 or not uf.strip().isalpha()):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"A sigla de UF '{uf}' é inválida. Informe exatamente 2 letras (ex: BA, SP, RJ)."
-        )
+    if not os.path.exists(CAMINHO_CSV_CAPACIDADE):
+        raise HTTPException(status_code=404, detail="Base 'capacidade-instalada-geracao-uf.csv' não encontrada.")
 
-    try:
-        df = pd.read_csv(caminho_csv, encoding="latin1", sep=';')
-        df = df.where(pd.notnull(df), None)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Falha ao ler ou decodificar o arquivo CSV da ANEEL: {str(e)}"
-        )
-    
-    col_uf = [c for c in df.columns if 'SigUF' in c or 'UF' in c]
-    if uf and col_uf:
-        df = df[df[col_uf[0]].astype(str).str.upper() == uf.strip().upper()]
+    uf_limpa = uf.strip().upper() if uf else None
+    if uf_limpa and (len(uf_limpa) != 2 or not uf_limpa.isalpha()):
+        raise HTTPException(status_code=400, detail=f"A sigla de UF '{uf}' é inválida. Informe 2 letras (ex: BA, SP).")
+
+    df = _ler_csv_capacidade_cached(os.path.getmtime(CAMINHO_CSV_CAPACIDADE))
+    col_uf = next((c for c in df.columns if "SigUF" in c or "UF" in c), None)
+
+    if uf_limpa and col_uf:
+        df = df[df[col_uf].astype(str).str.upper() == uf_limpa]
         if df.empty:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Nenhum registro de geração encontrado para a UF '{uf.upper()}'."
-            )
-        
+            raise HTTPException(status_code=404, detail=f"Nenhum registro encontrado para a UF '{uf_limpa}'.")
+
     return CapacidadeResponse(
         status="Sucesso",
         total_registros=len(df),
-        uf_filtrada=uf.upper() if uf else None,
-        dados=df.head(100).to_dict(orient="records")
+        uf_filtrada=uf_limpa,
+        dados=df.head(100).to_dict(orient="records"),
     )
 
-@app.get(
-    "/dados/resumo-texto",
-    response_model=TextoScrapingResponse,
-    responses={404: {"model": ErroDetalhadoResponse}, 500: {"model": ErroDetalhadoResponse}},
-    summary="Retorna o corpus textual extraído via Web Scraping"
-)
+@app.get("/dados/resumo-texto", response_model=TextoScrapingResponse, summary="Retorna o corpus textual extraído via Web Scraping")
 def obter_texto_scraping():
-    caminho_txt = "data/textos_web.txt"
-    if not os.path.exists(caminho_txt):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Arquivo 'data/textos_web.txt' não encontrado. Execute o pipeline de web scraping antes de consultar."
-        )
-    
-    try:
-        with open(caminho_txt, "r", encoding="utf-8") as f:
-            conteudo = f.read()
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro de leitura no arquivo de texto extraído: {str(e)}"
-        )
+    if not os.path.exists(CAMINHO_TXT_SCRAPING):
+        raise HTTPException(status_code=404, detail="Arquivo 'data/textos_web.txt' não encontrado.")
+
+    with open(CAMINHO_TXT_SCRAPING, "r", encoding="utf-8") as f:
+        conteudo = f.read()
 
     if not conteudo.strip():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="O arquivo 'data/textos_web.txt' existe, mas está vazio."
-        )
-        
+        raise HTTPException(status_code=404, detail="O arquivo 'data/textos_web.txt' está vazio.")
+
     return TextoScrapingResponse(
         status="Sucesso",
         fonte="UFPR - Revista Brasileira de Energias Renováveis",
         tamanho_caracteres=len(conteudo),
         amostra=conteudo[:500],
-        conteudo_completo=conteudo
+        conteudo_completo=conteudo,
     )
 
-@app.post(
-    "/dados/registrar",
-    response_model=RegistroResponse,
-    responses={400: {"model": ErroDetalhadoResponse}, 422: {"model": ErroDetalhadoResponse}},
-    summary="Registra e valida novos dados de potencial energético"
-)
+@app.post("/dados/registrar", response_model=RegistroResponse, summary="Registra novos dados de potencial energético")
 def registrar_dados(registro: NovoRegistroRequest):
     if not registro.uf.isalpha():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A sigla da UF deve conter apenas letras."
-        )
+        raise HTTPException(status_code=400, detail="A sigla da UF deve conter apenas letras.")
     return RegistroResponse(
         status="Sucesso",
-        mensagem=f"Registro validado e recebido para a UF {registro.uf.upper()}.",
-        dados_validados=registro
+        mensagem=f"Registro validado para a UF {registro.uf.upper()}.",
+        dados_validados=registro,
     )
 
-@app.post(
-    "/processar_texto",
-    response_model=ProcessamentoTextoResponse,
-    responses={
-        400: {"model": ErroDetalhadoResponse},
-        422: {"model": ErroDetalhadoResponse},
-        503: {"model": ErroDetalhadoResponse},
-        504: {"model": ErroDetalhadoResponse}
-    },
-    summary="Executa análise de sentimento local via HuggingFace com proteção de timeout"
-)
+@app.post("/processar_texto", response_model=ProcessamentoTextoResponse, summary="Classificação de sentimento local (DistilBERT)")
 def processar_texto(payload: TextoEntradaRequest):
-    # 1. Verificação de disponibilidade do modelo (503 Service Unavailable)
-    if nlp_pipeline is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Serviço de IA indisponível no momento. Motivo: {erro_carregamento_modelo}"
-        )
-    
-    # 2. Validação semântica do texto de entrada (400 Bad Request)
+    pipe = modelos_estado["sentimento"]
+    if pipe is None:
+        raise HTTPException(status_code=503, detail=f"Serviço de sentimento indisponível: {modelos_estado['erro_sentimento']}")
+
     texto_limpo = payload.texto.strip()
     if len(texto_limpo) < 3:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="O texto enviado contém menos de 3 caracteres válidos após remoção de espaços."
-        )
+        raise HTTPException(status_code=400, detail="O texto enviado contém menos de 3 caracteres válidos.")
 
     texto_cortado = texto_limpo[:512]
-
-    # 3. Execução protegida por Timeout (504 Gateway Timeout)
-    try:
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            futuro = executor.submit(nlp_pipeline, texto_cortado)
-            inferencia = futuro.result(timeout=15.0)[0]
-    except FuturesTimeoutError:
-        logger.error("Timeout na inferência do modelo local.")
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="O modelo de linguagem excedeu o tempo limite de 15 segundos para processar o texto."
-        )
-    except Exception as e:
-        logger.error(f"Erro durante a inferência do modelo: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Falha interna durante a execução do modelo HuggingFace: {str(e)}"
-        )
-
-    score_arredondado = round(float(inferencia["score"]), 4)
+    inferencia = _executar_inferencia(pipe, texto_cortado, timeout_seg=15.0)
+    score = round(float(inferencia["score"]), 4)
 
     return ProcessamentoTextoResponse(
         status="Processado com sucesso (Execução Local Offline)",
@@ -327,7 +326,45 @@ def processar_texto(payload: TextoEntradaRequest):
         texto_processado=texto_cortado,
         resultado=ResultadoAnalise(
             classificacao=inferencia["label"],
-            confianca=score_arredondado,
-            confianca_percentual=f"{score_arredondado * 100:.2f}%"
-        )
+            confianca=score,
+            confianca_percentual=f"{score * 100:.2f}%",
+        ),
+    )
+
+@app.post(
+    "/sumarizar_texto",
+    response_model=SumarizacaoResponse,
+    responses={400: {"model": ErroDetalhadoResponse}, 503: {"model": ErroDetalhadoResponse}, 504: {"model": ErroDetalhadoResponse}},
+    summary="Automação de sumarização de artigos e relatórios (PTT5 Local)",
+)
+def sumarizar_texto(payload: SumarizacaoRequest):
+    pipe = modelos_estado["sumarizacao"]
+    if pipe is None:
+        raise HTTPException(status_code=503, detail=f"Serviço de sumarização indisponível: {modelos_estado['erro_sumarizacao']}")
+
+    texto_limpo = payload.texto.strip()
+    if len(texto_limpo) < 50:
+        raise HTTPException(status_code=400, detail="Envie um texto com pelo menos 50 caracteres válidos para gerar um resumo.")
+
+    texto_entrada = texto_limpo[:1500]
+    resultado = _executar_inferencia(
+        pipe,
+        f"resumir: {texto_entrada}",
+        timeout_seg=30.0,
+        max_length=payload.tamanho_maximo,
+        min_length=payload.tamanho_minimo,
+        do_sample=False,
+    )
+
+    resumo = resultado["summary_text"].strip()
+    reducao = max(0.0, (1 - (len(resumo) / len(texto_entrada))) * 100)
+
+    return SumarizacaoResponse(
+        status="Sumarizado com sucesso (Execução Local Offline)",
+        tipo_analise="Sumarização Abstrativa de Texto (LLM/Seq2Seq)",
+        modelo_utilizado="recogna-nlp/ptt5-base-summ-cstnews",
+        caracteres_originais=len(texto_entrada),
+        caracteres_resumo=len(resumo),
+        taxa_compressao_percentual=f"{reducao:.1f}%",
+        resumo_gerado=resumo,
     )

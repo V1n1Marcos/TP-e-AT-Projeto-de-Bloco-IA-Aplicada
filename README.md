@@ -1,68 +1,65 @@
-# 🌱 Projeto: Análise e Inteligência em Energia Renovável no Brasil
+# 🌱 Plataforma de Inteligência em Energia Renovável & Sustentabilidade (TDSP / AT)
 
-Plataforma analítica orientada a serviços desenvolvida sob a metodologia **CRISP-DM** para análise da matriz elétrica renovável brasileira, integrando **Streamlit (Multipáginas)**, **FastAPI**, **Web Scraping (BeautifulSoup)** e **Processamento de Linguagem Natural (NLP) offline com HuggingFace Transformers**.
-
----
-
-## 📑 Documentação Oficial do Projeto
-- 📜 **[Project Charter](Project%20Charter.md):** Escopo, reavaliação do problema de negócio, justificativa técnica sobre o não uso de Selenium e roadmap de IA.
-- 📊 **[Data Summary Report (v1.0)](Data%20Summary%20Report.md):** Dicionário e detalhamento técnico das bases da ANEEL, pipeline de scraping da UFPR e contratos JSON da API.
-- 🧪 **[Evidência de Testes da API](evidencia_test_api.txt):** Log de execução automatizada validando rotas de sucesso e exceções HTTP (`200`, `400`, `404`).
+Solução analítica ponta a ponta desenvolvida sob os frameworks **TDSP (Team Data Science Process)** e **CRISP-DM** para democratizar o acesso a indicadores da matriz elétrica renovável brasileira e sintetizar literatura científica sobre transição energética. O sistema integra dados públicos reais da **ANEEL**, coleta automatizada via **Web Scraping (UFPR)**, serviços RESTful em **FastAPI**, modelos de **IA Local (HuggingFace Transformers)** e um **Dashboard Executivo Multipáginas em Streamlit**.
 
 ---
 
-## 🛠️ Bibliotecas Principais Utilizadas
+## 📑 Documentação Oficial e Evidências
+- 📜 **[Project Charter (v3.0)](Project%20Charter.md):** Definição do problema de negócio, alinhamento aos ODS/ESG, ciclo completo do TDSP e justificativa técnica sobre o uso de IA e Engenharia de Prompts.
+- 📊 **[Data Summary Report (v2.0)](Data%20Summary%20Report.md):** Inventário das bases reais da ANEEL, pipeline de Web Scraping da UFPR, contratos JSON e fluxo de transformação de dados em insights.
+- 🧪 **[Evidência de Testes Automatizados](evidencia_test_api.txt):** Registro real da execução do `test_api.py` validando inferências locais e tratamento de exceções HTTP (`200`, `400`, `404`, `422`).
 
-| Biblioteca | Versão Mínima | Papel na Arquitetura |
+---
+
+## 🎯 Argumentação da Solução: Problema de Negócio, ESG e ODS
+
+### O Problema de Negócio
+Embora o Brasil possua uma das matrizes elétricas mais limpas do mundo, os dados oficiais de capacidade instalada (ANEEL) e os estudos acadêmicos sobre viabilidade fotovoltaica e eólica encontram-se dispersos em arquivos CSV técnicos de difícil leitura e artigos científicos extensos. Essa barreira informacional dificulta a tomada de decisão de consumidores residenciais, pequenos gestores e pesquisadores que buscam reduzir custos tarifários e mitigar impactos ambientais.
+
+### Como a Solução Resolve o Problema e Gera Valor (ESG & ODS)
+1. **Ambiental (Environmental — ODS 7 e ODS 13):** Ao cruzar dados reais de expansão solar/eólica por Unidade Federativa com resumos executivos de pesquisas científicas, a plataforma incentiva a adoção de energia limpa e a redução da dependência de termelétricas fósseis.
+2. **Social (Social — ODS 7 e ODS 12):** Traduz indicadores complexos em linguagem acessível, permitindo que o cidadão compreenda o potencial energético do seu estado e tome decisões conscientes de consumo e microgeração distribuída.
+3. **Governança (Governance):** Implementa rastreabilidade completa dos dados, contratos estritos de validação (`Pydantic`), diagnóstico padronizado de falhas e execução 100% local (*on-premise/offline*), garantindo privacidade, reprodutibilidade e independência de serviços proprietários em nuvem.
+
+---
+
+## 🔄 Ciclo Completo de Ciência de Dados Aplicado (TDSP)
+
+| Etapa do Ciclo | Implementação Técnica | Valor Gerado na Solução |
 | :--- | :--- | :--- |
-| **`fastapi`** | `0.110+` | Framework web assíncrono responsável pela camada de serviços RESTful e documentação OpenAPI (`/docs`). |
-| **`uvicorn`** | `0.28+` | Servidor ASGI de alta performance utilizado para hospedar e executar a aplicação FastAPI localmente. |
-| **`pydantic`** | `2.0+` | Validação estrita de contratos de entrada (*Request Models*), saída (*Response Models*) e erros padronizados. |
-| **`transformers`** | `4.40+` | Biblioteca da HuggingFace usada para baixar, salvar localmente e carregar o tokenizador e o modelo NLP offline. |
-| **`torch` (PyTorch)** | `2.2+` | Motor de computação tensorial responsável por executar a inferência da rede neural em CPU ou GPU. |
-| **`streamlit`** | `1.35+` | Framework de interface web interativa multipáginas (`st.navigation`) com cache e gerenciamento de sessão. |
-| **`pandas`** | `2.0+` | Manipulação, limpeza e filtragem dos datasets públicos da ANEEL em formato CSV. |
-| **`beautifulsoup4`** & **`requests`** | `4.12+` / `2.31+` | Coleta e parsing HTML estático de literatura científica sobre energias renováveis (UFPR). |
+| **1. Coleta e Aquisição** | Ingestão de bases abertas da ANEEL (`capacidade-instalada-geracao-uf.csv` e `siga-empreendimentos-geracao-diario.csv`) + Web Scraping estático (`scrapping.py` via `BeautifulSoup4`) na Revista Brasileira de Energias Renováveis (UFPR). | Combina dados quantitativos oficiais (2006–2026) com embasamento qualitativo científico real. |
+| **2. Limpeza e Preparação** | Tratamento de encodings (`latin1`/`utf-8`), conversão de `NaN` para `None` para serialização JSON, desambiguação da coluna `AnoReferencia` e filtragem de ruídos HTML (`<p>`, `<div>`, `<section>`). | Garante integridade referencial, elimina falhas de serialização e otimiza leitura com `@st.cache_data`. |
+| **3. Arquitetura de Serviços** | Backend assíncrono em `FastAPI` (`api.py` v5.0.0) com *Response Models* tipados (`Pydantic`) e *Exception Handlers* globais (`400`, `404`, `422`, `500`, `503`, `504`). | Desacopla a lógica de dados e IA da interface visual, permitindo consumo padronizado e seguro. |
+| **4. Modelagem e IA Local** | Integração offline de dois modelos HuggingFace: **`PTT5`** (`recogna-nlp/ptt5-base-summ-cstnews`) para sumarização abstrativa (`POST /sumarizar_texto`) e **`DistilBERT`** (`lxyuan/distilbert-base-multilingual-cased-sentiments-student`) para classificação de sentimento (`POST /processar_texto`). | Transforma textos acadêmicos extensos em resumos executivos claros e classifica percepções em tempo real sem custos de nuvem. |
+| **5. Apresentação e Decisão** | Dashboard Executivo Multipáginas em `Streamlit` (`st.navigation`) com KPIs do pipeline, gráficos comparativos por UF, Nuvem de Palavras e Laboratório Interativo de IA. | Une simplicidade de navegação com profundidade analítica para apoiar decisões baseadas em dados. |
 
 ---
 
-## 💻 Requisitos de Hardware e Desempenho (CPU vs. GPU)
+## 🛠️ Bibliotecas Principais e Requisitos de Hardware
 
-A escolha da arquitetura local foi calibrada para rodar em ambientes de desenvolvimento convencionais sem exigir hardware especializado:
+### Stack Tecnológica
+- **Backend & Validação:** `fastapi`, `uvicorn`, `pydantic`
+- **IA & NLP Local:** `transformers`, `torch`, `sentencepiece`, `protobuf`
+- **Dados & Visualização:** `pandas`, `streamlit`, `wordcloud`, `matplotlib`
+- **Coleta Web & Testes:** `requests`, `beautifulsoup4`
 
-- **CPU vs. GPU:** O modelo adotado utiliza arquitetura destilada (*DistilBERT*), operando com alta eficiência diretamente em **CPU** (processadores x86_64 modernos de 4+ núcleos). Caso uma GPU NVIDIA com suporte a CUDA esteja disponível, o PyTorch acelera a inferência em lote, mas ela **não é obrigatória** para o funcionamento em tempo real desta API.
-- **Memória RAM Necessária:**
-  - *Armazenamento em disco:* ~540 MB para os pesos (`model.safetensors`) e arquivos de vocabulário na pasta `modelo_local/`.
-  - *Consumo em memória RAM:* O processo Python + Uvicorn + modelo carregado consome aproximadamente **1,2 GB a 1,6 GB de RAM**, permitindo execução confortável em máquinas com **8 GB de RAM** totais (mesmo rodando simultaneamente com o navegador e o Streamlit).
-- **Tempo de Carga e Inferência:**
-  - *Cold Start (Inicialização do Uvicorn):* Entre **2 e 5 segundos** para ler os pesos do disco local (`local_files_only=True`) e instanciar o `pipeline` em memória.
-  - *Tempo de Inferência por Requisição:* Entre **80 ms e 250 ms** por texto (até 512 caracteres) em CPU, muito abaixo do limite de segurança configurado no servidor (`timeout = 15s`).
+### Hardware, Memória e Desempenho (CPU vs. GPU)
+- **Processamento (CPU vs. GPU):** Ambos os modelos operam integralmente em **CPU** (processadores x86_64 modernos), dispensando GPU dedicada.
+- **Armazenamento e Memória RAM:**
+  - `modelo_local/` (DistilBERT): **~540 MB** em disco.
+  - `modelo_sumarizacao/` (PTT5-base): **~890 MB** em disco.
+  - **Consumo total em RAM:** Aproximadamente **2,4 GB a 3,0 GB de RAM** com os dois modelos carregados simultaneamente no `Uvicorn`, rodando confortavelmente em máquinas com **8 GB de RAM**.
+- **Latência:** Inicialização (*cold start*) em **5 a 8 segundos**; inferência de sentimento em **< 250 ms** e sumarização abstrativa em **1,5 s a 4 s** em CPU (protegidos por timeouts de 15s e 30s).
 
----
-
-## 🧠 Justificativa Técnica e Comparativo do Modelo Local
-
-### Modelo Escolhido: `lxyuan/distilbert-base-multilingual-cased-sentiments-student`
-- **Qualidade para a Tarefa:** Trata-se de um modelo *student* destilado via *knowledge distillation* a partir de um professor *zero-shot* (`MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`), treinado especificamente para classificação de sentimentos em múltiplos idiomas, incluindo **Português**. Para textos curtos e médios sobre percepção energética, tarifas e sustentabilidade, entrega alta acurácia sem necessidade de *fine-tuning* adicional.
-- **Licença e Disponibilidade:** Disponível publicamente no **HuggingFace Model Hub** sob licença **Apache 2.0**, o que garante liberdade de uso acadêmico e comercial, reprodutibilidade e download integral dos pesos para operação 100% offline (`local_files_only=True`).
-
-### Comparativo com Alternativas Avaliadas
-
-| Critério | `distilbert-multilingual-sentiments` (Escolhido) | `neuralmind/bert-large-portuguese-cased` (BERTimbau Large) | LLMs Generativos Locais via Ollama (ex: `Llama-3 8B` / `Mistral 7B`) |
-| :--- | :--- | :--- | :--- |
-| **Tamanho em Disco** | **~540 MB** | ~1,34 GB | ~4,7 GB a 8 GB (quantizado Q4) |
-| **Consumo de RAM/VRAM** | **~1,5 GB RAM** | ~3,5 GB RAM | 8 GB a 16 GB RAM/VRAM |
-| **Latência em CPU** | **< 250 ms** | ~600 ms a 1,5 s | 10 s a 45 s por resposta |
-| **Prontidão para Sentimento** | **Pronto para uso (*out-of-the-box*)** | Requer *fine-tuning* supervisonado (cabeça de classificação) | Requer *prompt engineering* e parsing de texto livre |
-| **Veredito Arquitetural** | **Ideal para classificação rápida, leve e determinística em API.** | Excelente para português, mas exige treino adicional e mais RAM. | Mais indicado para geração de texto livre/RAG (próxima etapa), pesado para classificação simples. |
+### Justificativa Comparativa dos Modelos
+- **Sumarização (`recogna-nlp/ptt5-base-summ-cstnews`):** Arquitetura T5 pré-treinada e ajustada especificamente para o português brasileiro (corpus CSTNews), entregando alta coerência gramatical na síntese de textos técnicos sob licença aberta no HuggingFace Hub, com pegada de memória muito inferior a LLMs generativos de 7B+ parâmetros (como Llama-3 ou Mistral via Ollama, que exigiriam 8–16 GB de RAM/VRAM).
+- **Sentimento (`lxyuan/distilbert-base-multilingual-cased-sentiments-student`):** Modelo destilado sob licença **Apache 2.0**, pronto para uso (*out-of-the-box*) em português, superando alternativas como o `BERTimbau Large` em velocidade de resposta e menor consumo de RAM sem exigir *fine-tuning* adicional.
 
 ---
 
-## 🚀 Passo a Passo para Configuração e Execução
+## 🚀 Passo a Passo de Execução
 
-Siga a ordem exata abaixo no terminal (PowerShell ou Bash) a partir da raiz do projeto:
-
-### 1. Criar e Ativar o Ambiente Virtual (`.venv`)
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+1. **Criar e ativar o ambiente virtual:**
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
